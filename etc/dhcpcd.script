@@ -1,0 +1,133 @@
+#! /bin/sh
+
+if [ ! "$reason" = "BOUND6" -a ! "$reason" = "REBIND6" ]; then
+    exit
+fi
+
+startWSL2 () {
+    wsl2list=$(wsl.exe -l -v | iconv -futf-16le | sed -nr -e 's/\r//' -e 's/^[* ]+([^ ]+) *([^ ]+) *2$/\1 \2/p')
+    if [ -n "$wsl2list" -a "$wsl2list" = "${wsl2list%% Running*}" ]; then
+	wsl.exe -d ${wsl2list%% *} echo
+    fi
+}
+
+callPowerShell () {
+    case $1 in
+	super ) 
+	    powershell.exe start-process -windowstyle hidden powershell -Verb runas $2 | tr -d '\r';;
+	* )
+	    powershell.exe $2 | tr -d '\r';;
+    esac
+}
+
+getOldPrefix () {
+    _ps=$(cat <<- EOF
+	Get-NetRoute -AddressFamily IPv6 |
+	where {(\$_.InterfaceAlias -match '(WSL)'
+	    -or \$_.InterfaceAlias -match '(Default Switch)')
+	    -and \$_.DestinationPrefix -match '${prefix56}.0::/64'} |
+	%{\$_.DestinationPrefix};
+	EOF
+    )
+    callPowerShell normal "$_ps"
+}
+
+getInterfaces () {
+    _ps=$(cat <<- EOF
+	Get-NetRoute -DestinationPrefix '0.0.0.0/0' | %{'I:' + \$_.ifIndex + ':A:' + \$_.InterfaceAlias};
+	Get-NetAdapter -Name 'vEther*' | %{'N:' + \$_.Name};
+	EOF
+    )
+    _d=$(callPowerShell normal "$_ps")
+    defaultindex=$(echo "$_d" | sed -nr 's/^I:([0-9]+):.*$/\1/p')
+    defaultname=$( echo "$_d" | sed -nr 's/^I:.*:A:(.*)$/\1/p'|sed -r 's/^(...............).*/\1/')
+    defaultswitch=$(echo "$_d"| sed -nr 's/^N:(vEther.*\(Default Switch\).*)$/\1/p')
+    wslswitch=$(echo "$_d"| sed -nr 's/^N:(vEther.*\(WSL\).*)$/\1/p')
+}
+
+stateDefault () {
+    cat <<- EOF
+	Set-NetIPInterface -Forwarding Enabled -InterfaceIndex ${defaultindex};
+	Set-NetIPInterface -InterfaceAlias 'vEthernet (${defaultname})'
+	 -AddressFamily IPv6 -Dhcp Disabled -RouterDiscovery Disabled;
+	EOF
+}
+
+stateRemoveOldPrefix () {
+    for remove in  $oldprefix
+    do
+	remove=$(echo $remove| sed "s|.::/64\$|$i::/64|")
+	cat <<- EOF
+		Set-NetIPInterface -InterfaceAlias '$interface' -AddressFamily IPv6
+			-AdvertisedRouterLifetime (New-TimeSpan -Minutes 0) -PassThru;
+		Set-NetRoute -InterfaceAlias '$interface' -AddressFamily IPv6
+			-DestinationPrefix '$remove' -Publish no  -PassThru;
+		Set-NetRoute -InterfaceAlias '$interface' -AddressFamily IPv6
+			-DestinationPrefix '$remove' -ValidLifetime 0 -PreferredLifetime 0 -Publish yes -PassThru;
+		EOF
+    done
+}
+
+stateRemoveAddress () {
+    cat <<- EOF
+	Get-NetIPAddress -InterfaceAlias '$interface' -AddressFamily IPv6 |
+		where {\`\$_.IPAddress.StartsWith('$prefix56')} |
+		Remove-NetIPAddress -Confirm:\`\$False -PassThru;
+	EOF
+}
+
+stateNewIF () {
+    cat <<- EOF
+	New-NetIPAddress -IPAddress $prefix:$address -PrefixLength 64
+		-InterfaceAlias '$interface' -SkipAsSource \`\$True -PolicyStore ActiveStore;
+	EOF
+}
+
+stateRoute () {
+    cat <<- EOF
+	Set-NetIPInterface -InterfaceAlias '$interface' -Forwarding Enabled;
+	Set-NetIPInterface -InterfaceAlias '$interface' -AddressFamily IPv6 -Advertising Enabled
+		-AdvertiseDefaultRoute Enabled -AdvertisedRouterLifetime (New-TimeSpan -Minutes 30) -PassThru;
+	Set-NetRoute -InterfaceAlias '$interface' -AddressFamily IPv6 -DestinationPrefix '$prefix::/64' -Publish no -PassThru;
+	Set-NetRoute -InterfaceAlias '$interface' -AddressFamily IPv6 -DestinationPrefix '$prefix::/64' -Publish yes;
+	EOF
+
+}
+
+startWSL2
+
+prefix=${new_dhcp6_ia_pd1_prefix1%::*}
+prefix56=$(echo $prefix | sed -r 's/^(.*)..$/\1/')
+address=$(od -An -tx8 -N8 /dev/random | sed -r 's/^ *(.{4})(.{4})(.{4})(.{4})/\1:\2:\3:\4/')
+
+getInterfaces
+default=$(stateDefault)
+oldprefix=$(getOldPrefix)
+
+if [ "${oldprefix}" = "${prefix}::/64" ]; then
+    default=
+fi
+
+i=0
+for interface in "$wslswitch" "$defaultswitch"
+do
+    if [ -n "$interface" ]; then
+	removera=$removera$(stateRemoveOldPrefix "$removera")
+	removeaddr=$removeaddr$(stateRemoveAddress "$removeaddr")
+	newif=$newif$(stateNewIF "$newif")
+	route=$route$(stateRoute "$route")
+	i=`expr $i + 1`
+	prefix=$(echo $prefix| sed "s/.\$/$i/")
+    fi
+done
+
+if [ -n "$default" ]; then
+    if [ -n "$removera" ]; then
+	removera="${removera}sleep 6;"
+    fi
+    route="sleep 2;$route"
+    c="$default$removera$removeaddr$newif$route"
+else
+    c="$route"
+fi
+callPowerShell super "\"${c}\""
