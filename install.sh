@@ -13,7 +13,7 @@ installAlpine() {
 }
 
 createDhcpcdConf () {
-    $DISTRO_EXEC apk --no-cache add dhcpcd curl > /dev/null
+    $DISTRO_EXEC apk --no-cache add dhcpcd > /dev/null
     local defaultindex=$(execPowerShell "(Get-NetRoute -DestinationPrefix '0.0.0.0/0' | Get-NetAdapter | ?{\$_.Status -eq 'Up'}).InterfaceIndex")
     local primary=$($DISTRO_EXEC ip -4 addr 2> /dev/null | sed -nr "s/^$defaultindex: *([^:]*):.*\$/\\1/p")
     local devs=$($DISTRO_EXEC cat /proc/net/route | sed -nr 's/^([a-z]+[0-9]+)\s.*$/\1/p' | sort | uniq | grep -v $primary)
