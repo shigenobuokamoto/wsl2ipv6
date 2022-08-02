@@ -35,7 +35,7 @@ getOldPrefix () {
 getInterfaces () {
     _ps=$(cat <<- EOF
 	Get-NetRoute -DestinationPrefix '0.0.0.0/0' | %{'I:' + \$_.ifIndex + ':A:' + \$_.InterfaceAlias};
-	Get-NetAdapter -Name 'vEther*' | %{'N:' + \$_.Name};
+	Get-NetIPInterface -AddressFamily ipv6 -InterfaceAlias 'vEther*' | %{'N:' + \$_.InterfaceAlias};
 	EOF
     )
     _d=$(callPowerShell normal "$_ps")
