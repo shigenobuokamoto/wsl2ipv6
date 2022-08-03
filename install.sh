@@ -7,7 +7,7 @@ execPowerShell () {
 }
 
 installAlpine() {
-    local ROOTFS=$(execPowerShell '$env:USERPROFILE')'\AppData\Local\WSL\IPv6'
+    local ROOTFS=$(execPowerShell '$env:USERPROFILE')'\AppData\Local\WSL\'$DISTRO_NAME
     mkdir -p $(wslpath $ROOTFS)
     curl -s $ALPINE_MINIROOT | wsl.exe --import $DISTRO_NAME $ROOTFS - --version 1
 }

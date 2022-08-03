@@ -48,8 +48,7 @@ getInterfaces () {
 stateDefault () {
     cat <<- EOF
 	Set-NetIPInterface -Forwarding Enabled -InterfaceIndex ${defaultindex};
-	Set-NetIPInterface -InterfaceAlias 'vEthernet (${defaultname})'
-	 -AddressFamily IPv6 -Dhcp Disabled -RouterDiscovery Disabled;
+	Get-NetIPInterface -AddressFamily IPv6|?{\$_.InterfaceAlias -eq 'vEthernet ($defaultname)'}|Set-NetIPInterface -Dhcp Disabled -RouterDiscovery Disabled;
 	EOF
 }
 
